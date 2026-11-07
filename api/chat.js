@@ -48,7 +48,6 @@ export default async function handler(req, res) {
         filename.toLowerCase().endsWith(".txt")
       ) {
         const text = Buffer.from(data, "base64").toString("utf8");
-
         content.push({
           type: "input_text",
           text: `Isi dokumen ${filename}:\n${text}`
@@ -68,7 +67,9 @@ export default async function handler(req, res) {
     }
 
     if (content.length === 0) {
-      return res.status(400).json({ error: "Pesan atau lampiran harus diisi" });
+      return res.status(400).json({
+        error: "Pesan atau lampiran harus diisi"
+      });
     }
 
     const response = await fetch(
@@ -81,7 +82,27 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model: "gpt-6-luna",
-          instructions: "Kamu adalah Erzixy AI, asisten yang ramah, pintar, dan membantu. Jawab menggunakan bahasa pengguna. Jika pengguna mengirim gambar atau dokumen, analisis isi lampiran tersebut.",
+          instructions: `Kamu adalah Erzixy AI, asisten yang ramah, pintar, dan membantu.
+Jawab menggunakan bahasa pengguna.
+Jika pengguna mengirim gambar atau dokumen, analisis isinya.
+
+FITUR PEMBUATAN FILE:
+Jika pengguna meminta dibuatkan file, jangan hanya memberikan kode.
+Buat isi file secara lengkap dan gunakan format khusus berikut:
+
+[[ERZIXY_FILE filename="index.html" mime="text/html"]]
+ISI FILE LENGKAP DI SINI
+[[/ERZIXY_FILE]]
+
+Aturan:
+- Ganti filename dengan nama file yang sesuai.
+- Gunakan MIME type yang sesuai.
+- Isi di antara tag harus merupakan isi file asli, bukan penjelasan.
+- Jangan gunakan Markdown code fence di dalam tag.
+- Bisa membuat lebih dari satu file.
+- Setelah tag file, berikan penjelasan singkat kepada pengguna.
+- Jika tidak diminta membuat file, jawab seperti biasa.
+- Jangan mengaku file berhasil dibuat jika tag file tidak disertakan.`,
           input: [
             {
               role: "user",
@@ -106,11 +127,37 @@ export default async function handler(req, res) {
       .map(item => item.text)
       .join("\n");
 
+    const files = [];
+    const filePattern =
+      /\[\[ERZIXY_FILE filename="([^"]+)" mime="([^"]+)"\]\]\s*([\s\S]*?)\s*\[\[\/ERZIXY_FILE\]\]/g;
+
+    const reply = answer.replace(
+      filePattern,
+      (match, filename, mimeType, fileContent) => {
+        const buffer = Buffer.from(fileContent, "utf8");
+
+        if (buffer.length > 1500000) {
+          return `\nFile ${filename} terlalu besar untuk dikirim.\n`;
+        }
+
+        files.push({
+          filename,
+          mimeType,
+          data: buffer.toString("base64")
+        });
+
+        return `\nFile berhasil disiapkan: ${filename}\n`;
+      }
+    );
+
     return res.status(200).json({
-      reply: answer || "AI belum memberikan jawaban."
+      reply: reply || "AI belum memberikan jawaban.",
+      files
     });
 
   } catch (error) {
+    console.error("Erzixy backend error:", error);
+
     return res.status(500).json({
       error: "Terjadi kesalahan server."
     });
