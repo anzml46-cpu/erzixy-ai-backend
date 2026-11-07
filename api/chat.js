@@ -1,74 +1,74 @@
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).json({
-      error: "Method not allowed"
-    });
+    return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
     const { message, attachment } = req.body || {};
 
-    if (!message || typeof message !== "string") {
-      return res.status(400).json({
-        error: "Pesan kosong"
-      });
+    if (typeof message !== "string" || message.length > 10000) {
+      return res.status(400).json({ error: "Pesan tidak valid" });
     }
 
-    if (message.length > 10000) {
-      return res.status(400).json({
-        error: "Pesan terlalu panjang"
-      });
-    }
-
-    const content = [
-      {
-        type: "input_text",
-        text: message
-      }
-    ];
+    const content = [];
 
     if (attachment) {
       const { type, filename, mimeType, data } = attachment;
 
       if (
-        !["image", "file"].includes(type) ||
         typeof filename !== "string" ||
         typeof mimeType !== "string" ||
-        typeof data !== "string"
+        typeof data !== "string" ||
+        data.length > 3500000
       ) {
-        return res.status(400).json({
-          error: "Lampiran tidak valid"
-        });
+        return res.status(400).json({ error: "Lampiran tidak valid atau terlalu besar" });
       }
 
-      if (data.length > 3500000) {
-        return res.status(413).json({
-          error: "File terlalu besar"
-        });
-      }
+      const fileData = `data:${mimeType};base64,${data}`;
 
-      const fileData =
-        `data:${mimeType};base64,${data}`;
-
-      if (type === "image") {
-        if (!mimeType.startsWith("image/")) {
-          return res.status(400).json({
-            error: "Format gambar tidak valid"
-          });
-        }
-
+      if (type === "image" && mimeType.startsWith("image/")) {
         content.push({
           type: "input_image",
           image_url: fileData,
           detail: "auto"
         });
-      } else {
+      } else if (
+        type === "file" &&
+        mimeType === "application/pdf" &&
+        filename.toLowerCase().endsWith(".pdf")
+      ) {
         content.push({
           type: "input_file",
           filename,
           file_data: fileData
         });
+      } else if (
+        type === "file" &&
+        mimeType === "text/plain" &&
+        filename.toLowerCase().endsWith(".txt")
+      ) {
+        const text = Buffer.from(data, "base64").toString("utf8");
+
+        content.push({
+          type: "input_text",
+          text: `Isi dokumen ${filename}:\n${text}`
+        });
+      } else {
+        return res.status(400).json({
+          error: "Format lampiran tidak didukung"
+        });
       }
+    }
+
+    if (message.trim()) {
+      content.push({
+        type: "input_text",
+        text: message
+      });
+    }
+
+    if (content.length === 0) {
+      return res.status(400).json({ error: "Pesan atau lampiran harus diisi" });
     }
 
     const response = await fetch(
@@ -77,13 +77,11 @@ export default async function handler(req, res) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization":
-            `Bearer ${process.env.OPENAI_API_KEY}`
+          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
         },
         body: JSON.stringify({
           model: "gpt-6-luna",
-          instructions:
-            "Kamu adalah Erzixy AI, asisten AI yang ramah, pintar, dan membantu. Jawab menggunakan bahasa pengguna.",
+          instructions: "Kamu adalah Erzixy AI, asisten yang ramah, pintar, dan membantu. Jawab menggunakan bahasa pengguna. Jika pengguna mengirim gambar atau dokumen, analisis isi lampiran tersebut.",
           input: [
             {
               role: "user",
@@ -94,17 +92,15 @@ export default async function handler(req, res) {
       }
     );
 
-    const data = await response.json();
+    const result = await response.json();
 
     if (!response.ok) {
       return res.status(response.status).json({
-        error:
-          data.error?.message ||
-          "Gagal menghubungi AI"
+        error: result.error?.message || "Gagal menghubungi AI"
       });
     }
 
-    const answer = (data.output || [])
+    const answer = (result.output || [])
       .flatMap(item => item.content || [])
       .filter(item => item.type === "output_text")
       .map(item => item.text)
@@ -116,7 +112,7 @@ export default async function handler(req, res) {
 
   } catch (error) {
     return res.status(500).json({
-      error: "Terjadi kesalahan server"
+      error: "Terjadi kesalahan server."
     });
   }
-  }
+}
